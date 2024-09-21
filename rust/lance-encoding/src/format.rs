@@ -131,12 +131,14 @@ impl ProtobufUtils {
         indices: ArrayEncoding,
         items: ArrayEncoding,
         num_items: u32,
+        exact_bit_width: Option<u32>,
     ) -> ArrayEncoding {
         ArrayEncoding {
             array_encoding: Some(ArrayEncodingEnum::Dictionary(Box::new(Dictionary {
                 indices: Some(Box::new(indices)),
                 items: Some(Box::new(items)),
                 num_dictionary_items: num_items,
+                exact_bit_width,
             }))),
         }
     }

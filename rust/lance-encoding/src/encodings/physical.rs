@@ -199,11 +199,13 @@ pub fn decoder_from_array_encoding(
 
             let should_decode_dict = !data_type.is_dictionary();
 
+            let exact_bit_width = dictionary.exact_bit_width;
             Box::new(DictionaryPageScheduler::new(
                 indices_scheduler.into(),
                 items_scheduler.into(),
                 num_dictionary_items,
                 should_decode_dict,
+                exact_bit_width,
             ))
         }
         pb::array_encoding::ArrayEncoding::FixedSizeBinary(fixed_size_binary) => {

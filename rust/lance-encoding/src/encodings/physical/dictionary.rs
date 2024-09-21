@@ -226,6 +226,7 @@ impl AlreadyDictionaryEncoder {
     }
 }
 
+
 impl ArrayEncoder for AlreadyDictionaryEncoder {
     fn encode(
         &self,
@@ -291,16 +292,19 @@ impl ArrayEncoder for AlreadyDictionaryEncoder {
 pub struct DictionaryEncoder {
     indices_encoder: Box<dyn ArrayEncoder>,
     items_encoder: Box<dyn ArrayEncoder>,
+    use_exact_bit_width: bool,
 }
 
 impl DictionaryEncoder {
     pub fn new(
         indices_encoder: Box<dyn ArrayEncoder>,
         items_encoder: Box<dyn ArrayEncoder>,
+        use_exact_bit_width: bool,
     ) -> Self {
         Self {
             indices_encoder,
             items_encoder,
+            use_exact_bit_width,
         }
     }
 }
@@ -351,6 +355,10 @@ fn encode_dict_indices_and_items(string_array: &StringArray) -> (ArrayRef, Array
     (array_dict_indices, array_dict_elements)
 }
 
+fn compute_bit_width(val: u32) -> u32 {
+    32 - val.leading_zeros()
+}
+
 impl ArrayEncoder for DictionaryEncoder {
     fn encode(
         &self,
@@ -373,6 +381,13 @@ impl ArrayEncoder for DictionaryEncoder {
 
         let (index_array, items_array) = encode_dict_indices_and_items(str_data.as_string());
         let dict_size = items_array.len() as u32;
+
+        let exact_bit_width = if self.use_exact_bit_width {
+            Some(compute_bit_width(dict_size - 1))
+        } else {
+            None
+        };
+
         let index_data = DataBlock::from(index_array);
         let items_data = DataBlock::from(items_array);
 
@@ -393,6 +408,7 @@ impl ArrayEncoder for DictionaryEncoder {
             encoded_indices.encoding,
             encoded_items.encoding,
             dict_size,
+            exact_bit_width,
         );
 
         Ok(EncodedArray {

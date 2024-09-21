@@ -214,6 +214,8 @@ message Dictionary {
   ArrayEncoding indices = 1;
   ArrayEncoding items = 2;
   uint32 num_dictionary_items = 3;
+  // If set, use exact bit width for dictionary encoding
+  optional uint32 exact_bit_width = 4;
 }
 
 message PackedStruct {
