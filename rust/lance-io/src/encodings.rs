@@ -11,6 +11,8 @@ pub mod binary;
 pub mod dictionary;
 pub mod plain;
 
+pub mod bitpacked;
+
 use crate::ReadBatchParams;
 use lance_core::Result;
 

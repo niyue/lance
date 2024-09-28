@@ -279,6 +279,7 @@ impl ArrayEncoder for AlreadyDictionaryEncoder {
             encoded_indices.encoding,
             encoded_items.encoding,
             num_dictionary_items,
+            None,
         );
 
         Ok(EncodedArray {

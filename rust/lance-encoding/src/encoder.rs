@@ -276,6 +276,13 @@ impl CoreArrayEncodingStrategy {
             }
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
                 if use_dict_encoding {
+                    let use_exact_bit_width = if let Some(meta) = field_meta {
+                        meta.get("exact_bit_width_dict")
+                            .map_or(false, |v| v == "true")
+                    } else {
+                        false
+                    };
+
                     let dict_indices_encoder = Self::choose_array_encoder(
                         arrays,
                         &DataType::UInt8,
@@ -284,6 +291,7 @@ impl CoreArrayEncodingStrategy {
                         version,
                         None,
                     )?;
+
                     let dict_items_encoder = Self::choose_array_encoder(
                         arrays,
                         &DataType::Utf8,
@@ -296,6 +304,7 @@ impl CoreArrayEncodingStrategy {
                     Ok(Box::new(DictionaryEncoder::new(
                         dict_indices_encoder,
                         dict_items_encoder,
+                        use_exact_bit_width,
                     )))
                 }
                 // The parent datatype should be binary or utf8 to use the fixed size encoding

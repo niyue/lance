@@ -189,6 +189,8 @@ pub fn decoder_from_array_encoding(
             Box::new(FsstPageScheduler::new(inner, fsst.symbol_table.clone()))
         }
         pb::array_encoding::ArrayEncoding::Dictionary(dictionary) => {
+            let exact_bit_width: Option<u8> = dictionary.exact_bit_width.map(|v| v as u8);
+            // TODO: use exact_bit_width for decoding indices
             let indices_encoding = dictionary.indices.as_ref().unwrap();
             let items_encoding = dictionary.items.as_ref().unwrap();
             let num_dictionary_items = dictionary.num_dictionary_items;
@@ -199,13 +201,11 @@ pub fn decoder_from_array_encoding(
 
             let should_decode_dict = !data_type.is_dictionary();
 
-            let exact_bit_width = dictionary.exact_bit_width;
             Box::new(DictionaryPageScheduler::new(
                 indices_scheduler.into(),
                 items_scheduler.into(),
                 num_dictionary_items,
                 should_decode_dict,
-                exact_bit_width,
             ))
         }
         pb::array_encoding::ArrayEncoding::FixedSizeBinary(fixed_size_binary) => {
