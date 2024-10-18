@@ -24,7 +24,9 @@ use crate::encodings::logical::r#struct::StructFieldEncoder;
 use crate::encodings::logical::r#struct::StructStructuralEncoder;
 use crate::encodings::physical::bitpack_fastlanes::compute_compressed_bit_width_for_non_neg;
 use crate::encodings::physical::bitpack_fastlanes::BitpackedForNonNegArrayEncoder;
-use crate::encodings::physical::block_compress::{CompressionConfig, CompressionScheme};
+use crate::encodings::physical::block_compress::{
+    CompressedBufferEncoder, CompressionConfig, CompressionScheme,
+};
 use crate::encodings::physical::dictionary::AlreadyDictionaryEncoder;
 use crate::encodings::physical::fsst::FsstArrayEncoder;
 use crate::encodings::physical::packed_struct::PackedStructEncoder;
@@ -475,8 +477,14 @@ impl CoreArrayEncodingStrategy {
         data_size: u64,
         version: LanceFileVersion,
     ) -> Result<Box<dyn ArrayEncoder>> {
-        let bin_indices_encoder =
-            Self::choose_array_encoder(arrays, &DataType::UInt64, data_size, false, version, None)?;
+        let bin_indices_encoder = Self::choose_array_encoder(
+            arrays,
+            &DataType::UInt64,
+            data_size,
+            false,
+            version,
+            field_meta,
+        )?;
 
         let compression = field_meta.and_then(Self::get_field_compression);
 
@@ -486,6 +494,29 @@ impl CoreArrayEncodingStrategy {
         } else {
             Ok(bin_encoder)
         }
+    }
+
+    fn choose_encoder_for_numeric(
+        arrays: &[ArrayRef],
+        data_type: &DataType,
+        version: LanceFileVersion,
+        field_meta: Option<&HashMap<String, String>>,
+    ) -> Box<dyn ArrayEncoder> {
+        let mut encoder: Option<Box<dyn ArrayEncoder>> = None;
+
+        if version >= LanceFileVersion::V2_1 {
+            if arrays[0].data_type() == data_type {
+                let compressed_bit_width = compute_compressed_bit_width_for_non_neg(arrays);
+                encoder = Some(Box::new(BitpackedForNonNegArrayEncoder::new(
+                    compressed_bit_width as usize,
+                    data_type.clone(),
+                )));
+            }
+        }
+        if let Some(compression) = field_meta.and_then(Self::get_field_compression) {
+            encoder = Some(Box::new(CompressedBufferEncoder::new(compression)));
+        }
+        encoder.unwrap_or_else(|| Box::new(BasicEncoder::new(Box::new(ValueEncoder::default()))))
     }
 
     fn choose_array_encoder(
@@ -505,7 +536,7 @@ impl CoreArrayEncodingStrategy {
                         data_size,
                         use_dict_encoding,
                         version,
-                        None,
+                        field_meta,
                     )?,
                     *dimension as u32,
                 )))))
@@ -561,7 +592,7 @@ impl CoreArrayEncodingStrategy {
                             data_size,
                             false,
                             version,
-                            None,
+                            field_meta,
                         )?;
 
                         Ok(Box::new(BasicEncoder::new(Box::new(
@@ -588,43 +619,23 @@ impl CoreArrayEncodingStrategy {
                         data_size,
                         use_dict_encoding,
                         version,
-                        None,
+                        field_meta,
                     )?;
                     inner_encoders.push(inner_encoder);
                 }
 
                 Ok(Box::new(PackedStructEncoder::new(inner_encoders)))
             }
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                if version >= LanceFileVersion::V2_1 && arrays[0].data_type() == data_type {
-                    let compressed_bit_width = compute_compressed_bit_width_for_non_neg(arrays);
-                    Ok(Box::new(BitpackedForNonNegArrayEncoder::new(
-                        compressed_bit_width as usize,
-                        data_type.clone(),
-                    )))
-                } else {
-                    Ok(Box::new(BasicEncoder::new(Box::new(
-                        ValueEncoder::default(),
-                    ))))
-                }
-            }
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => Ok(
+                Self::choose_encoder_for_numeric(arrays, data_type, version, field_meta),
+            ),
 
             // TODO: for signed integers, I intend to make it a cascaded encoding, a sparse array for the negative values and very wide(bit-width) values,
             // then a bitpacked array for the narrow(bit-width) values, I need `BitpackedForNeg` to be merged first, I am
             // thinking about putting this sparse array in the metadata so bitpacking remain using one page buffer only.
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                if version >= LanceFileVersion::V2_1 && arrays[0].data_type() == data_type {
-                    let compressed_bit_width = compute_compressed_bit_width_for_non_neg(arrays);
-                    Ok(Box::new(BitpackedForNonNegArrayEncoder::new(
-                        compressed_bit_width as usize,
-                        data_type.clone(),
-                    )))
-                } else {
-                    Ok(Box::new(BasicEncoder::new(Box::new(
-                        ValueEncoder::default(),
-                    ))))
-                }
-            }
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => Ok(
+                Self::choose_encoder_for_numeric(arrays, data_type, version, field_meta),
+            ),
             _ => Ok(Box::new(BasicEncoder::new(Box::new(
                 ValueEncoder::default(),
             )))),
@@ -1337,14 +1348,14 @@ pub async fn encode_batch(
 #[cfg(test)]
 pub mod tests {
     use crate::version::LanceFileVersion;
-    use arrow_array::{ArrayRef, StringArray};
+    use arrow_array::{ArrayRef, StringArray, UInt8Array};
     use arrow_schema::Field;
     use lance_core::datatypes::{COMPRESSION_LEVEL_META_KEY, COMPRESSION_META_KEY};
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use super::check_fixed_size_encoding;
     use super::{check_dict_encoding, ArrayEncodingStrategy, CoreArrayEncodingStrategy};
+    use super::{check_fixed_size_encoding, get_dict_encoding_threshold};
 
     fn is_dict_encoding_applicable(arr: Vec<Option<&str>>, threshold: u64) -> bool {
         let arr = StringArray::from(arr);
@@ -1501,5 +1512,51 @@ pub mod tests {
                              ])),
                              LanceFileVersion::V2_1,
                              "BinaryEncoder { indices_encoder: BasicEncoder { values_encoder: ValueEncoder }, compression_config: Some(CompressionConfig { scheme: Zstd, level: Some(22) }), buffer_compressor: Some(ZstdBufferCompressor { compression_level: 22 }) }");
+    }
+
+    #[test]
+    fn test_choose_encoder_for_numeric_field() {
+        verify_array_encoder(
+            Arc::new(UInt8Array::from(vec![1, 2, 3])),
+            None,
+            LanceFileVersion::V2_0,
+            "BasicEncoder { values_encoder: ValueEncoder }",
+        );
+
+        verify_array_encoder(
+            Arc::new(UInt8Array::from(vec![1, 2, 3])),
+            None,
+            LanceFileVersion::V2_1,
+            "BitpackedForNonNegArrayEncoder { compressed_bit_width: 2, original_data_type: UInt8 }",
+        );
+    }
+
+    #[test]
+    fn test_choose_encoder_for_fixed_width_string() {
+        verify_array_encoder(Arc::new(StringArray::from(vec!["a", "b", "c"])),
+                             None,
+                             LanceFileVersion::V2_1,
+                             "BasicEncoder { values_encoder: FixedSizeBinaryEncoder { bytes_encoder: BasicEncoder { values_encoder: ValueEncoder }, byte_width: 1 } }");
+    }
+
+    #[test]
+    fn test_choose_encoder_for_low_cardinality_string() {
+        // create a low cardinality string array
+        let mut values = Vec::new();
+        for i in 0..get_dict_encoding_threshold() + 1 {
+            values.push(format!("value{}", i % 20));
+        }
+        verify_array_encoder(Arc::new(StringArray::from(values)),
+                             None,
+                             LanceFileVersion::V2_1,
+                             "DictionaryEncoder { indices_encoder: BitpackedForNonNegArrayEncoder { compressed_bit_width: 8, original_data_type: UInt8 }, items_encoder: BinaryEncoder { indices_encoder: BasicEncoder { values_encoder: ValueEncoder }, compression_scheme: None, buffer_compressor: None } }");
+    }
+
+    #[test]
+    fn test_choose_encoder_for_string() {
+        verify_array_encoder(Arc::new(StringArray::from(vec!["a", "bb", "ccc"])),
+                             None,
+                             LanceFileVersion::V2_1,
+                             "BinaryEncoder { indices_encoder: BasicEncoder { values_encoder: ValueEncoder }, compression_scheme: None, buffer_compressor: None }");
     }
 }
