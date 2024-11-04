@@ -498,6 +498,14 @@ impl CoreArrayEncodingStrategy {
         }
     }
 
+    fn default_encoder(field_meta: Option<&HashMap<String, String>>) -> Box<dyn ArrayEncoder> {
+        if let Some(compression) = field_meta.and_then(Self::get_field_compression) {
+            Box::new(CompressedBufferEncoder::new(compression))
+        } else {
+            Box::new(BasicEncoder::new(Box::new(ValueEncoder::default())))
+        }
+    }
+
     fn choose_encoder_for_numeric(
         arrays: &[ArrayRef],
         data_type: &DataType,
@@ -515,10 +523,7 @@ impl CoreArrayEncodingStrategy {
                 )));
             }
         }
-        if let Some(compression) = field_meta.and_then(Self::get_field_compression) {
-            encoder = Some(Box::new(CompressedBufferEncoder::new(compression)));
-        }
-        encoder.unwrap_or_else(|| Box::new(BasicEncoder::new(Box::new(ValueEncoder::default()))))
+        encoder.unwrap_or_else(|| Self::default_encoder(field_meta))
     }
 
     fn choose_array_encoder(
@@ -638,9 +643,7 @@ impl CoreArrayEncodingStrategy {
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => Ok(
                 Self::choose_encoder_for_numeric(arrays, data_type, version, field_meta),
             ),
-            _ => Ok(Box::new(BasicEncoder::new(Box::new(
-                ValueEncoder::default(),
-            )))),
+            _ => Ok(Self::default_encoder(field_meta)),
         }
     }
 }
@@ -1359,7 +1362,7 @@ pub async fn encode_batch(
 #[cfg(test)]
 pub mod tests {
     use crate::version::LanceFileVersion;
-    use arrow_array::{ArrayRef, StringArray, UInt8Array};
+    use arrow_array::{ArrayRef, StringArray, TimestampMillisecondArray, UInt8Array};
     use arrow_schema::Field;
     use lance_core::datatypes::{COMPRESSION_LEVEL_META_KEY, COMPRESSION_META_KEY};
     use std::collections::HashMap;
@@ -1569,5 +1572,18 @@ pub mod tests {
                              None,
                              LanceFileVersion::V2_1,
                              "BinaryEncoder { indices_encoder: BasicEncoder { values_encoder: ValueEncoder }, compression_scheme: None, buffer_compressor: None }");
+    }
+
+    #[test]
+    fn test_choose_encoder_for_timestamp_with_compression_meta() {
+        verify_array_encoder(
+            Arc::new(TimestampMillisecondArray::from(vec![1, 2, 3]).with_timezone_utc()),
+            Some(HashMap::from([(
+                COMPRESSION_META_KEY.to_string(),
+                "zstd".to_string(),
+            )])),
+            LanceFileVersion::V2_0,
+            "CompressedBufferEncoder { compressor: ZstdBufferCompressor { compression_level: 0 } }",
+        );
     }
 }
