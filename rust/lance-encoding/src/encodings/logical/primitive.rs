@@ -9,7 +9,7 @@ use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer};
 use arrow_schema::{DataType, Field as ArrowField};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, TryStreamExt};
 use lance_arrow::{deepcopy::deep_copy_array, DataTypeExt};
-use log::{debug, trace};
+use log::{debug, error, trace};
 use snafu::{location, Location};
 
 use lance_core::{datatypes::Field, utils::tokio::spawn_cpu, Result};
@@ -1382,7 +1382,13 @@ impl PrimitiveFieldEncoder {
                 row_number: 0, // legacy encoders do not use
             })
         })
-        .map(|res_res| res_res.unwrap())
+        .map(|res_res| res_res.unwrap_or_else(|err| {
+            error!("Encoding task failed with error: {:?}", err);
+            Err(lance_core::Error::Internal {
+                message: format!("Encoding task failed with error: {:?}", err),
+                location: location!(),
+            })
+        }))
         .boxed())
     }
 
