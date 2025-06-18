@@ -3,11 +3,10 @@
 
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType;
+use log::error;
 use snafu::location;
-use std::{
-    io::{Cursor, Write},
-    str::FromStr,
-};
+use std::{io::Write, str::FromStr};
+use zstd::bulk::decompress_to_buffer;
 
 use lance_core::{Error, Result};
 
@@ -94,7 +93,8 @@ impl ZstdBufferCompressor {
 
 impl BufferCompressor for ZstdBufferCompressor {
     fn compress(&self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-        let mut encoder = zstd::Encoder::new(output_buf, self.compression_level)?;
+        output_buf.write_all(&(input_buf.len() as u64).to_le_bytes())?;
+        let mut encoder = zstd::stream::Encoder::new(output_buf, self.compression_level)?;
         encoder.write_all(input_buf)?;
         match encoder.finish() {
             Ok(_) => Ok(()),
@@ -103,8 +103,23 @@ impl BufferCompressor for ZstdBufferCompressor {
     }
 
     fn decompress(&self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-        let source = Cursor::new(input_buf);
-        zstd::stream::copy_decode(source, output_buf)?;
+        // read the first 64-bit prefix as the uncompressed buffer length
+        let mut input_buf = input_buf;
+        let mut uncompressed_len_buf = [0u8; 8];
+        uncompressed_len_buf.copy_from_slice(&input_buf[..8]);
+        let uncompressed_len = u64::from_le_bytes(uncompressed_len_buf) as usize;
+        input_buf = &input_buf[8..];
+
+        let input_len = input_buf.len();
+        // resize output buffer to the uncompressed length
+        output_buf.resize(uncompressed_len, 0);
+        let output_len = output_buf.len();
+        let result = decompress_to_buffer(input_buf, output_buf);
+        if let Err(e) = result {
+            error!("Failed to decompress zstd buffer: input_buffer size: {}, output_buffer size: {}, error: {:?}", input_len, output_len, e);
+            return Err(e.into());
+        }
+
         Ok(())
     }
 
