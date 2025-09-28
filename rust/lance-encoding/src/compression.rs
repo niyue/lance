@@ -389,6 +389,9 @@ impl DefaultCompressionStrategy {
         let mut base_encoder: Box<dyn MiniBlockCompressor> = if max_len
             >= FSST_LEAST_INPUT_MAX_LENGTH
             && data_size >= FSST_LEAST_INPUT_SIZE as u64
+            // // avoid FSST if another general compression is explicitly requested
+            && (params.compression.as_deref() != Some("zstd")
+                && params.compression.as_deref() != Some("lz4"))
         {
             Box::new(FsstMiniBlockEncoder::default())
         } else {
