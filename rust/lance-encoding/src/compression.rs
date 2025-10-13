@@ -307,7 +307,7 @@ impl DefaultCompressionStrategy {
     }
 
     /// Parse compression parameters from field metadata
-    fn parse_field_metadata(field: &Field) -> CompressionFieldParams {
+    fn parse_field_metadata(field: &Field, version: &LanceFileVersion) -> CompressionFieldParams {
         let mut params = CompressionFieldParams::default();
 
         // Parse compression method
@@ -332,6 +332,27 @@ impl DefaultCompressionStrategy {
                 None => {
                     log::warn!("Invalid BSS mode '{}', using default", bss_str);
                 }
+            }
+        }
+
+        // Parse binary minichunk size
+        if let Some(minichunk_size_str) = field
+            .metadata
+            .get(super::constants::BINARY_MINICHUNK_SIZE_META_KEY)
+        {
+            if let Ok(minichunk_size) = minichunk_size_str.parse::<i64>() {
+                // for lance v2.1, only 32kb or smaller is supported
+                if minichunk_size >= 32 * 1024 && *version <= LanceFileVersion::V2_1 {
+                    log::warn!(
+                        "Binary minichunk_size '{}' too large for version '{}', using default",
+                        minichunk_size,
+                        version
+                    );
+                } else {
+                    params.binary_minichunk_size = Some(minichunk_size);
+                }
+            } else {
+                log::warn!("Invalid minichunk_size '{}', skipping", minichunk_size_str);
             }
         }
 
@@ -395,7 +416,7 @@ impl DefaultCompressionStrategy {
         {
             Box::new(FsstMiniBlockEncoder::default())
         } else {
-            Box::new(BinaryMiniBlockEncoder::default())
+            Box::new(BinaryMiniBlockEncoder::new(params.binary_minichunk_size))
         };
 
         // 4. Apply general compression if configured
@@ -418,7 +439,7 @@ impl DefaultCompressionStrategy {
             .get_field_params(&field.name, &field.data_type());
 
         // Override with field metadata if present (highest priority)
-        let metadata_params = Self::parse_field_metadata(field);
+        let metadata_params = Self::parse_field_metadata(field, &self.version);
         field_params.merge(&metadata_params);
 
         field_params
@@ -1108,6 +1129,7 @@ mod tests {
                 compression: Some("lz4".to_string()),
                 compression_level: None,
                 bss: Some(BssMode::Off), // Explicitly disable BSS to test RLE
+                binary_minichunk_size: None,
             },
         );
 
@@ -1139,6 +1161,7 @@ mod tests {
                 compression: Some("zstd".to_string()),
                 compression_level: Some(3),
                 bss: Some(BssMode::Off), // Disable BSS to test RLE
+                binary_minichunk_size: None,
             },
         );
 
@@ -1262,6 +1285,7 @@ mod tests {
                 compression: Some("zstd".to_string()),
                 compression_level: Some(6),
                 bss: None,
+                binary_minichunk_size: None,
             },
         );
 
@@ -1404,6 +1428,7 @@ mod tests {
                 compression: Some("lz4".to_string()),
                 compression_level: None,
                 bss: None,
+                binary_minichunk_size: None,
             },
         );
 
