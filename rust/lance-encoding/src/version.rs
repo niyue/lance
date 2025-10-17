@@ -12,7 +12,7 @@ pub const V2_FORMAT_2_1: &str = "2.1";
 pub const V2_FORMAT_2_2: &str = "2.2";
 
 /// Lance file version
-#[derive(Debug, Default, PartialEq, Eq, Clone, Copy, Ord, PartialOrd, strum::EnumIter)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd, strum::EnumIter)]
 pub enum LanceFileVersion {
     // This is a little confusing but we rely on the following facts:
     //
@@ -25,7 +25,6 @@ pub enum LanceFileVersion {
     //
     /// The legacy (0.1) format
     Legacy,
-    #[default]
     V2_0,
     /// The latest stable release (also the default version for new datasets)
     Stable,
@@ -33,6 +32,18 @@ pub enum LanceFileVersion {
     /// The latest unstable release
     Next,
     V2_2,
+}
+
+impl Default for LanceFileVersion {
+    fn default() -> Self {
+        if let Ok(version_str) = std::env::var("LANCE_DEFAULT_FILE_VERSION") {
+            if let Ok(version) = Self::from_str(&version_str) {
+                return version;
+            }
+        }
+        // fall back to V2_0 if env var is not set or invalid
+        Self::V2_0
+    }
 }
 
 impl LanceFileVersion {
